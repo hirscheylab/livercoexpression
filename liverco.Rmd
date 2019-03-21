@@ -1,0 +1,27 @@
+---
+title: "R Notebook for liver coexpression analysis"
+output: html_notebook
+---
+
+#load libraries
+
+```{r}
+
+```
+
+#import data
+```{r}
+
+```
+
+#correlation analysis
+```{r}
+
+```
+
+#GSEA
+```{r}
+
+```
+
+
