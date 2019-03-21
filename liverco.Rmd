@@ -76,5 +76,12 @@ emapplot(keggX , showCategory = 30 , color = "pvalue")#Creates a network using t
 =======
 >>>>>>> Shreyas gseKEGG
 ```
+#Visualization
+```{r}
+
+p1 <- dotplot(keggResult,showCategory = 30, x = 'GeneRatio' , color = "pvalue", font.size = 12) + ggtitle("dotplot for SIRT5cor_all Data") #Creates a dotplot using the 30 processes with the lowest pvalues
+plot_grid(p1, ncol=1)
+
+```
 
 
