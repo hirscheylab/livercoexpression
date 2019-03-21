@@ -6,12 +6,18 @@ output: html_notebook
 #load libraries
 
 ```{r}
+library(dplyr)
+library(enrichplot)
+library(clusterProfiler)
+library(pathview)
 
 ```
 
 #import data
 ```{r}
+getwd() #Ensure in the right working directory
 
+load("SIRT5cor_nontumor.RDA") #load the nontumor data frame
 ```
 
 #correlation analysis
@@ -21,6 +27,22 @@ output: html_notebook
 
 #GSEA
 ```{r}
+
+#Copying over the dataframe
+geneList <- SIRT5cor_nontumor
+
+#Creating the correct data struture for input, a named vector of correlation values for analysis. Ensured to be sorted in 
+#decreasing order
+genes <- geneList[["SIRT5"]] #Select SIRT5 Coorelation values 
+names(genes) <- (geneList[["ENTREZID"]]) #Encoding the EntrezID in its position as an attribute of a numeric vector
+genes <- sort(genes , decreasing = TRUE) #Sort in decreasing order
+
+
+keggResult <- gseKEGG(genes , organism = "hsa", keyType = "ncbi-geneid") #Conduct gene set analysis using KEGG database
+keggX <- setReadable(keggResult, 'org.Hs.eg.db', keyType = 'ENTREZID') #Convert the EntrezID to actual gene names
+
+results <- keggX@result #Isolate out the results data frame
+resultsGeneSets <- keggX@geneSets #Isolate out the gene sets themselves
 
 ```
 
