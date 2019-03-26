@@ -17,13 +17,25 @@ library(pathview)
 ```{r}
 getwd() #Ensure in the right working directory
 
-load("SIRT5cor_nontumor.RDA") #load the nontumor data frame
+
 ```
 
 #correlation analysis
 ```{r}
 
 ```
+
+#save correlation data
+```{r}
+
+```
+
+
+#import correlation data
+```{r}
+load("data/SIRT5cor_nontumor.RDA") #load the nontumor data frame
+```
+
 
 #GSEA
 ```{r}
