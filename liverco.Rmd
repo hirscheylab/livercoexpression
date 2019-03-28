@@ -6,28 +6,77 @@ output: html_notebook
 #load libraries
 
 ```{r}
-library(dplyr)
 library(enrichplot)
 library(clusterProfiler)
 library(pathview)
-
+library(tidyverse)
+library(tibble)
+library(xlsx)
+library("annotate")
+library("hgu133a2.db")
 ```
 
 #import data
 ```{r}
 getwd() #Ensure in the right working directory
-
+# Load original liver data
+liver_data = read.delim('data/GSE14520_data.txt')
 
 ```
 
 #correlation analysis
 ```{r}
+# Get all liver sample IDs and descriptions from a text file that is copy/pasted 
+# from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE14520
+liver_IDs = read.delim('data/GSE14520_ID.txt', header = F)
+names(liver_IDs) = c('GSM.ID', 'Description')
+liver_IDs$GSM.ID = gsub(' ', '', liver_IDs$GSM.ID) # remove white space from GSE IDs
 
+# Add Tumor/Non-Tumor status column to liver ID table 
+liver_IDs <- liver_IDs %>% 
+  mutate(Status = if_else(grepl("Non-Tumor", Description) | grepl("six healthy donors", Description), 'Non-Tumor', 'Tumor'))
+liver_IDs$Status = as.factor(liver_IDs$Status)
+
+# Get a list of nontumor IDs and use these to filter the liver_data for nontumor_data
+nontumor_IDs = liver_IDs[liver_IDs$Status == 'Non-Tumor', 1] # nontumor liver ids
+nontumor_data = liver_data %>% filter(GSM.ID %in% nontumor_IDs)
+rm(nontumor_IDs) # remove unnecessary vars from workspace
+
+# Format the nontumor_data (the purpose of this code is to get the nontumor_data in the correct format
+# to run GSEA); need the probe IDs from the formatted data sets
+nontumor_formatted = nontumor_data
+for(i in 2:length(nontumor_formatted)){
+  if (substr(names(nontumor_formatted)[i], 1, 1) == 'X'){
+    names(nontumor_formatted)[i] = strsplit(names(nontumor_formatted)[i], "X")[[1]][2]
+  }
+}
+rm(i)
+nontumor_formatted = t(nontumor_formatted)
+dimnames(nontumor_formatted)[[1]][1] = 'NAME'
+nontumor_formatted = cbind(rep('na', length(nontumor_formatted[,1])), nontumor_formatted[,1:ncol(nontumor_formatted)])
+nontumor_formatted[1][1] = 'Description'
+
+# Create SIRT5 correlation array using Spearman correlation
+probes = c("X219185_at")
+cor_matrix = cor(nontumor_data[2:length(liver_data)], nontumor_data[probes], method = 'spearman')
+SIRT5cor = cor_matrix
+
+# Correlation array data formatting, get gene symbol, entrezid, and gene name for each probe
+SIRT5cor = cbind(dimnames(SIRT5cor)[[1]], SIRT5cor)
+SIRT5cor[,1] = str_replace(SIRT5cor[,1], 'X', '')
+SIRT5cor = as_tibble(SIRT5cor)
+names(SIRT5cor)[1] = 'PROBEID'
+probes = dimnames(nontumor_formatted)[[1]][-1]
+map = select(hgu133a2.db, probes, c("SYMBOL","ENTREZID", "GENENAME"))
+SIRT5cor = left_join(SIRT5cor, map, "PROBEID")
+names(SIRT5cor)[2] = "SIRT5"
+SIRT5cor$SIRT5 = as.numeric(SIRT5cor$SIRT5)
+SIRT5cor_nontumor = SIRT5cor %>% dplyr::select(ENTREZID, SIRT5)
 ```
 
 #save correlation data
 ```{r}
-
+save(SIRT5cor_nontumor, file = "data/SIRT5cor_nontumor.Rda")
 ```
 
 
