@@ -16,10 +16,6 @@ library(pathview)
 #import data
 ```{r}
 getwd() #Ensure in the right working directory
-<<<<<<< HEAD
-
-=======
->>>>>>> Shreyas gseKEGG
 
 load("SIRT5cor_nontumor.RDA") #load the nontumor data frame
 ```
@@ -60,7 +56,7 @@ keggX <- setReadable(keggResult, 'org.Hs.eg.db', keyType = 'ENTREZID') #Convert 
 results <- keggX@result #Isolate out the results data frame
 resultsGeneSets <- keggX@geneSets #Isolate out the gene sets themselves
 
-<<<<<<< HEAD
+
 ```
 #Visualization
 ```{r}
@@ -72,9 +68,6 @@ cnetplot(keggX, foldChange=genes)#Creates a network using the 5 processes with t
 
 emapplot(keggX , showCategory = 30 , color = "pvalue")#Creates a network using the 30 processes with the lowest pvalues. The processes are nodes that are connected to other processes that share the same genes within its gene set. 
 
-
-=======
->>>>>>> Shreyas gseKEGG
 ```
 #Visualization
 ```{r}
