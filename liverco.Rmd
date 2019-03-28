@@ -54,27 +54,27 @@ liver_data <- liver_data %>%
 ```{r}
 #get non-tumor data
 nontumor_data <- liver_data %>% 
-  filter(status == "Non-Tumor")
+  filter(status == "Non-Tumor") %>% 
+  select_if(is.numeric)
 ```
 
 #correlation analysis
 ```{r}
 # Create SIRT5 correlation array using Spearman correlation
 probes = c("219185_at")
-cor_matrix = cor(nontumor_data[2:length(liver_data)], nontumor_data[probes], method = 'spearman')
-SIRT5cor = cor_matrix
+SIRT5cor <- cor(nontumor_data, nontumor_data[probes], method = 'spearman')
 
 # Correlation array data formatting, get gene symbol, entrezid, and gene name for each probe
 SIRT5cor = cbind(dimnames(SIRT5cor)[[1]], SIRT5cor)
 #SIRT5cor[,1] = str_replace(SIRT5cor[,1], 'X', '')
 SIRT5cor = as_tibble(SIRT5cor)
 names(SIRT5cor)[1] = 'PROBEID'
-probes = dimnames(nontumor_formatted)[[1]][-1]
+probes = SIRT5cor$PROBEID
 map = select(hgu133a2.db, probes, c("SYMBOL","ENTREZID", "GENENAME"))
 SIRT5cor = left_join(SIRT5cor, map, "PROBEID")
 names(SIRT5cor)[2] = "SIRT5"
 SIRT5cor$SIRT5 = as.numeric(SIRT5cor$SIRT5)
-SIRT5cor_nontumor = SIRT5cor %>% dplyr::select(ENTREZID, SIRT5)
+SIRT5cor_nontumor <- SIRT5cor %>% dplyr::select(ENTREZID, SIRT5)
 ```
 
 #save correlation data
