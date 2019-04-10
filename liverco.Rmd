@@ -6,6 +6,7 @@ output: html_notebook
 #load libraries
 
 ```{r}
+library(ggraph)
 library(enrichplot)
 library(clusterProfiler)
 library(tidyverse)
@@ -118,7 +119,7 @@ resultsGeneSets <- keggX@geneSets #Isolate out the gene sets themselves
 p1 <- dotplot(keggX,showCategory = 30, x = 'GeneRatio' , color = "pvalue", font.size = 12) + ggtitle("dotplot for SIRT5cor_all Data") #Creates a dotplot using the 30 processes with the lowest pvalues
 plot_grid(p1, ncol=1)
 
-cnetplot(keggX, foldChange=genes)#Creates a network using the 5 processes with the lowest pvalues. The processes are central nodes that are connected to the genes that are in its respective gene set
+cnetplot(keggX, foldChange=genes, node_label = FALSE)#Creates a network using the 5 processes with the lowest pvalues. The processes are central nodes that are connected to the genes that are in its respective gene set
 
 emapplot(keggX , showCategory = 30 , color = "pvalue")#Creates a network using the 30 processes with the lowest pvalues. The processes are nodes that are connected to other processes that share the same genes within its gene set. 
 
