@@ -139,7 +139,7 @@ beep(sound = 8) #because mario is awesome
 ```
 
 #volcano plot
-{r}
+```{r}
 #make labels df
 sig <- mac_plot %>% 
   filter(normalized_control <= -1 | normalized_control >= 1) %>% 
@@ -170,7 +170,7 @@ ggplot(mac_plot) +
 
 ```
 #save
-{r}
+```{r}
 ggsave("output/livercorr.pdf", plot = last_plot(), device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
 ```
 
