@@ -6,6 +6,7 @@ output: html_notebook
 #load libraries
 
 ```{r}
+library(ggraph)
 library(enrichplot)
 library(clusterProfiler)
 library(tidyverse)
@@ -111,6 +112,18 @@ keggX <- setReadable(keggResult, 'org.Hs.eg.db', keyType = 'ENTREZID') #Convert 
 results <- keggX@result #Isolate out the results data frame
 resultsGeneSets <- keggX@geneSets #Isolate out the gene sets themselves
 
+
+```
+#Visualization
+```{r}
+
+p1 <- dotplot(keggX,showCategory = 30, x = 'GeneRatio' , color = "pvalue", font.size = 12) + ggtitle("dotplot for SIRT5cor_all Data") #Creates a dotplot using the 30 processes with the lowest pvalues
+plot_grid(p1, ncol=1)
+
+cnetplot(keggX, foldChange=genes, node_label = FALSE)#Creates a network using the 5 processes with the lowest pvalues. The processes are central nodes that are connected to the genes that are in its respective gene set
+
+emapplot(keggX , showCategory = 30 , color = "pvalue")#Creates a network using the 30 processes with the lowest pvalues. The processes are nodes that are connected to other processes that share the same genes within its gene set. 
+
 ```
 #Visualization
 ```{r}
@@ -126,7 +139,7 @@ beep(sound = 8) #because mario is awesome
 ```
 
 #volcano plot
-{r}
+```{r}
 #make labels df
 sig <- mac_plot %>% 
   filter(normalized_control <= -1 | normalized_control >= 1) %>% 
@@ -157,7 +170,7 @@ ggplot(mac_plot) +
 
 ```
 #save
-{r}
+```{r}
 ggsave("output/livercorr.pdf", plot = last_plot(), device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
 ```
 
