@@ -16,6 +16,11 @@ library(janitor)
 library("annotate")
 library("hgu133a2.db")
 library(beepr)
+library(RColorBrewer)
+library(ggplot2)
+library(ggrepel)
+library(biomaRt)
+
 
 
 #clear environment
@@ -63,20 +68,20 @@ data <- liver_data %>%
 
 #correlation analysis
 ```{r}
-# Create SIRT5 correlation array using Spearman correlation
+# Create SIRT5 correlation array using Pearson correlation
 probe_cor <- c("219185_at")
-SIRT5cor <- cor(data, data[probe_cor], method = "spearman")
+SIRT5corPear <- cor(data, data[probe_cor], method = "pearson")
 
 # Correlation array data formatting, get gene symbol, entrezid, and gene name for each probe
-SIRT5cor <- cbind(dimnames(SIRT5cor)[[1]], SIRT5cor)
-SIRT5cor <- as_tibble(SIRT5cor)
-names(SIRT5cor)[1] <- 'PROBEID'
-probes <- SIRT5cor$PROBEID
+SIRT5corPear <- cbind(dimnames(SIRT5corPear)[[1]], SIRT5corPear)
+SIRT5corPear <- as_tibble(SIRT5corPear)
+names(SIRT5corPear)[1] <- 'PROBEID'
+probes <- SIRT5corPear$PROBEID
 map <- select(hgu133a2.db, probes, c("SYMBOL","ENTREZID", "GENENAME"))
-SIRT5cor = left_join(SIRT5cor, map, "PROBEID")
-names(SIRT5cor)[2] <- "SIRT5"
-SIRT5cor$SIRT5 <- as.numeric(SIRT5cor$SIRT5)
-SIRT5cor <- SIRT5cor %>% dplyr::select(ENTREZID, SIRT5)
+SIRT5corPear = left_join(SIRT5corPear, map, "PROBEID")
+names(SIRT5corPear)[2] <- "SIRT5"
+SIRT5corPear$SIRT5 <- as.numeric(SIRT5corPear$SIRT5)
+SIRT5corPear <- SIRT5corPear %>% dplyr::select(SYMBOL, ENTREZID, SIRT5)
 ```
 
 #save correlation data
@@ -91,51 +96,41 @@ load("data/SIRT5cor_nontumor.RDA") #load the nontumor data frame
 ```
 
 
-#GSEA
+#Bar-Plot
 ```{r}
-#prep dataframe for gsea
+# First three lines order the original dataframe in descending order and take the top 20 genes coorelating
+sortPear <- arrange(SIRT5corPear , desc(SIRT5))
+sortPear <- top_n(sortPear , 20 , SIRT5)
+sortPear <- select(sortPear , SYMBOL, SIRT5)
+
+sortPear <- aggregate(.~sortPear$SYMBOL, FUN=mean, data=sortPear[, -1]) #If there are duplicate genes coorelating differently, the average coorelation is taken 
+names(sortPear)[names(sortPear) == 'sortPear$SYMBOL'] <- 'SYMBOL' #Renaming column
+sortPear <- sortPear %>% arrange(SIRT5) #This arranges the list in ascending order
+sortPear <- slice(sortPear , 1:length(sortPear$SIRT5)-1) #This removes the SIRT5 gene since that's irrelevent data
+
+#Then turn it back into a factor with the levels in the correct order
+sortPear$SYMBOL <- as.character(sortPear$SYMBOL)
+sortPear$SYMBOL <- factor(sortPear$SYMBOL, levels=unique(sortPear$SYMBOL))
 
 
-#Copying over the dataframe
-geneList <- SIRT5cor
 
-#Creating the correct data struture for input, a named vector of correlation values for analysis. Ensured to be sorted in 
-#decreasing order
-genes <- geneList[["SIRT5"]] #Select SIRT5 Coorelation values 
-names(genes) <- (geneList[["ENTREZID"]]) #Encoding the EntrezID in its position as an attribute of a numeric vector
-genes <- sort(genes , decreasing = TRUE) #Sort in decreasing order
+#This part of the code finds the actual gene name and adds it to the table if necessary
+# ensembl <- useEnsembl(biomart="ensembl", dataset="hsapiens_gene_ensembl")
+# genedesc <- getBM(attributes=c('external_gene_name','description'), filters = 'external_gene_name', values = sortPear$SYMBOL, mart =ensembl)
+# 
+# genedesc$description <- sapply(strsplit(genedesc$description, split='[', fixed=TRUE), function(x) (x[1]))
+# names(genedesc)[names(genedesc) == 'external_gene_name'] <- 'SYMBOL'
+# 
+# sortPearTemp <- left_join(sortPear , genedesc)
 
+#This part creates the actual graph using the table
+ggplot(data = sortPear , aes(x = SYMBOL, y = SIRT5)) + 
+  geom_col(data = sortPear , aes(x = SYMBOL, y = SIRT5) , )  +  
+  labs(y = "Pearson Coorelation Values", x = "Gene IDs" , title = "Highest SIRT5 Coorelating Genes")+
+  coord_flip(ylim = c(.55, .71), ) + 
+  theme_light()+
+  ggsave("highestSIRT5coorelatinggenes.png")
 
-keggResult <- gseKEGG(genes , organism = "hsa", keyType = "ncbi-geneid") #Conduct gene set analysis using KEGG database
-keggX <- setReadable(keggResult, 'org.Hs.eg.db', keyType = 'ENTREZID') #Convert the EntrezID to actual gene names
-
-results <- keggX@result #Isolate out the results data frame
-resultsGeneSets <- keggX@geneSets #Isolate out the gene sets themselves
-
-
-```
-#Visualization
-```{r}
-
-p1 <- dotplot(keggX,showCategory = 30, x = 'GeneRatio' , color = "pvalue", font.size = 12) + ggtitle("dotplot for SIRT5cor_all Data") #Creates a dotplot using the 30 processes with the lowest pvalues
-plot_grid(p1, ncol=1)
-
-cnetplot(keggX, foldChange=genes, node_label = FALSE)#Creates a network using the 5 processes with the lowest pvalues. The processes are central nodes that are connected to the genes that are in its respective gene set
-
-emapplot(keggX , showCategory = 30 , color = "pvalue")#Creates a network using the 30 processes with the lowest pvalues. The processes are nodes that are connected to other processes that share the same genes within its gene set. 
-
-```
-#Visualization
-```{r}
-
-p1 <- dotplot(keggX, showCategory = 30, x = 'GeneRatio' , color = "pvalue", font.size = 12) + ggtitle("dotplot for SIRT5cor_all Data") #Creates a dotplot using the 30 processes with the lowest pvalues
-plot_grid(p1, ncol=1)
-
-cnetplot(keggX, foldChange=genes)#Creates a network using the 5 processes with the lowest pvalues. The processes are central nodes that are connected to the genes that are in its respective gene set
-
-emapplot(keggX , showCategory = 30 , color = "pvalue")#Creates a network using the 30 processes with the lowest pvalues. The processes are nodes that are connected to other processes that share the same genes within its gene set. 
-
-beep(sound = 8) #because mario is awesome
 ```
 
 #volcano plot
