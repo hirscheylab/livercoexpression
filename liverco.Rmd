@@ -89,7 +89,7 @@ SIRT5corPear <- SIRT5corPear %>% dplyr::select(SYMBOL, ENTREZID, SIRT5)
 
 #save correlation data
 ```{r}
-save(SIRT5cor, file = "data/SIRT5cor_nontumor.Rda")
+save(SIRT5corPear, file = "data/SIRT5cor_nontumor.Rda")
 ```
 
 
