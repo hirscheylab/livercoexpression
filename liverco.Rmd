@@ -24,8 +24,6 @@ library(biomaRt)
 library(dplyr)
 
 
-
-
 #clear environment
 rm(list=ls()) 
 
@@ -40,9 +38,8 @@ theme_set(theme_light())
 #import data
 ```{r}
 # Load original liver data
-liver_data <- read_tsv('data/GSE14520_data.txt') %>% 
-  clean_names() %>%
-  rename_all(funs(str_remove(., "^x")))
+liver_data <- read_tsv('data/GSE14520_data.txt')
+names(liver_data)[1] <- "gsm_id"
 
 # Get all liver sample IDs and descriptions from a text file that is copy/pasted 
 # from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE14520
@@ -66,7 +63,6 @@ liver_data <- liver_data %>%
 data <- liver_data %>% 
   filter(status == "Non-Tumor") %>% 
   select_if(is.numeric)
-
 ```
 
 #correlation analysis
@@ -138,6 +134,45 @@ ggplot(data = sortPear , aes(x = SYMBOL, y = SIRT5)) +
 emapplot(keggX , showCategory = 30 , color = "pvalue")#Creates a network using the 30 processes with the lowest pvalues. The processes are nodes that are connected to other processes that share the same genes within its gene set. 
 
 ```
+
+#GSEA
+```{r}
+# format data frame and save it as a ".gct" file for GSEA
+data_gct = data %>% rownames_to_column %>% 
+  gather(NAME, value, -rowname) %>% 
+  spread(rowname, value) %>% 
+  add_column(.after = 1, Description = "na")
+
+cat(paste("#1.2\n", toString(ncol(data)), "\t", toString(nrow(data)), "\n"), file = "data/data.gct")
+write_tsv(data_gct, "data/data.gct", append = TRUE, col_names = TRUE)
+```
+
+#plot of enriched gene sets
+```{r}
+# load and format dataframe of enriched gene sets (output from GSEA)
+genesets <- read.csv("data/genesets_SIRT5_pos.csv", header = TRUE)
+names(genesets)[1] <- "NAME"
+genesets$NAME <- tolower(genesets$NAME)
+genesets$NAME <- gsub("_", " ", genesets$NAME)
+genesets$NAME <- gsub("kegg ", "", genesets$NAME)
+
+# add column to dataframe to signify whether or not gene sets are involved in amino acid metabolism
+amino_acids = "alanine|arginine|asparagine|aspartate|cysteine|glutamine|glutamate|glycine|histidine|isoleucine|leucine|lysine|methionine|phenylalanine|proline|serine|threonine|tryptophan|tyrosine|valine"
+genesets <- genesets %>% mutate(aa_metabolism = str_detect(NAME, amino_acids))
+
+# create plot of normalized enrichment score and nominal p-value
+plot <- ggplot(genesets, color = str_wrap(10)) +
+    geom_point(data=subset(genesets, aa_metabolism == "FALSE"), aes(NOM.p.val, NES, color = "No"), alpha = 0.5, size = 2) +
+    geom_point(data=subset(genesets, aa_metabolism == "TRUE"), aes(NOM.p.val, NES, color="Yes"), alpha = 0.5, size = 2) +
+    xlab("Nominal p-Value") +
+    ylab("Normalized Enrichment Score (NES)") +
+    scale_colour_manual(name="Amino Acid\nMetabolism", values=c(Yes="#404788FF", No="#95D840FF")) +
+    guides(colour = guide_legend(nrow = 2)) +
+    theme_light()
+
+plot
+```
+
 
 #volcano plot
 ```{r}
