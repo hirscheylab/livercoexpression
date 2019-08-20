@@ -1,0 +1,181 @@
+---
+title: "R Notebook for liver coexpression analysis"
+output: html_notebook
+---
+
+#load libraries
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(tibble)
+library(readr)
+library(dplyr)
+library(ggrepel)
+library(janitor)
+library(enrichplot)
+library(clusterProfiler)
+library(biomaRt)
+library("annotate")
+library("hgu133a2.db")
+library(corrr)
+library(beepr)
+
+#clear environment
+rm(list=ls()) 
+
+#print Session information for provenance and reproducibility
+utils:::print.sessionInfo(sessionInfo()[-7]) 
+#You can remove an item from sessionInfo(), which is a list with a class attribute, by printing the resulting object omitting one of the list items (omitted list of packages installed, but not loaded)
+
+#Set theme
+theme_set(theme_light())
+```
+
+#import data
+```{r}
+# Load original liver data
+liver_data_raw <- read_tsv('data/GSE14520_data.txt')
+names(liver_data_raw)[1] <- "gsm_id"
+
+# Get all liver sample IDs and descriptions from a text file that is copy/pasted 
+# from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE14520
+liver_IDs <- read_tsv('data/GSE14520_ID.txt', col_names = FALSE)
+names(liver_IDs) = c('gsm_id', 'description')
+liver_IDs$gsm_id = gsub(' ', '', liver_IDs$gsm_id) # remove white space from GSE IDs
+
+# Add Tumor/Non-Tumor status column to liver ID table 
+liver_IDs <- liver_IDs %>% 
+  mutate(status = if_else(grepl("Non-Tumor", description) | grepl("six healthy donors", description), 'Non-Tumor', 'Tumor'))
+liver_IDs$status <- as.factor(liver_IDs$status)
+
+#Join liver data with ID to append tumor status
+liver_data_full <- liver_data_raw %>% 
+  left_join(liver_IDs, by = "gsm_id")
+```
+#match IDs to gene ID at this step?
+```{r}
+liver_data <- liver_data_full %>% 
+  dplyr::select(-gsm_id) %>% 
+  #dplyr::slice(1:20) %>% 
+  #dplyr::select(1:20) %>% 
+  return()
+
+keys <- names(liver_data) 
+names(keys) <- 'PROBEID'
+
+map <- select(hgu133a2.db, keys = keys, columns = c("SYMBOL", "ENTREZID", "GENENAME"), keytype = "PROBEID")
+```
+
+#select data of interest
+```{r}
+#get dataset of interest (non-tumor data)
+data <- liver_data_full %>% 
+  filter(status == "Non-Tumor") %>% 
+  select_if(is.numeric)
+```
+
+#correlation analysis
+```{r}
+corr_all <- data %>% 
+  correlate() 
+
+corr_sirt5 <- corr_all %>% 
+  focus("219185_at") %>% 
+  dplyr::rename(PROBEID = rowname) %>% 
+  dplyr::left_join(map, by = "PROBEID") %>% 
+  dplyr::rename(SIRT5 = "219185_at") %>% 
+  arrange(desc(SIRT5)) 
+
+corr_sirt5$GENENAME <- stringr::str_to_title(corr_sirt5$GENENAME)
+
+```
+
+#EDA SIRT5
+```{r}
+ggplot(corr_sirt5, aes(SIRT5)) +
+  geom_histogram(binwidth = .05, alpha = 0.9)
+
+```
+
+#Figure
+```{r}
+top <- corr_sirt5 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  dplyr::top_n(20, SIRT5) %>% #filter for top_n
+  ggplot(aes(x = fct_reorder(SYMBOL, SIRT5), y = SIRT5)) +
+  geom_col() +
+  geom_text(aes(y = 0, label = GENENAME), colour = "white", hjust = 0, nudge_y = 0.01) +
+  #geom_hline(yintercept = 0.5, size = 0.5, color = "white", linetype = 2) +
+  coord_flip() +
+  labs(y = "Ranked correlation with SIRT5 expression", x = "")
+print(top)
+
+bottom <- corr_sirt5 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  dplyr::top_n(-20, SIRT5) %>% #filter for bottom(-)20
+  ggplot(aes(x = fct_reorder(SYMBOL, SIRT5), y = SIRT5)) +
+  geom_col() +
+  geom_text(aes(y = 0, label = GENENAME), colour = "white", hjust = 1, nudge_y = -0.01) +
+  #geom_hline(yintercept = 0.5, size = 0.5, color = "white", linetype = 2) +
+  coord_flip() +
+  labs(y = "Ranked correlation with SIRT5 expression", x = "")
+print(bottom)
+```
+#save
+```{r}
+ggsave("output/livercorr_rank_top.pdf", plot = top, device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+ggsave("output/livercorr_rank_bottom.pdf", plot = bottom, device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+
+```
+
+#GSEA
+```{r}
+# format data frame and save it as a ".gct" file for GSEA
+data_gct = data %>% rownames_to_column %>% 
+  gather(NAME, value, -rowname) %>% 
+  spread(rowname, value) %>% 
+  add_column(.after = 1, Description = "na")
+
+cat(paste("#1.2\n", toString(ncol(data)), "\t", toString(nrow(data)), "\n"), file = "data/data.gct")
+write_tsv(data_gct, "data/data.gct", append = TRUE, col_names = TRUE)
+```
+
+#plot of enriched gene sets
+```{r}
+# load and format dataframe of enriched gene sets (output from GSEA)
+genesets <- read.csv("data/genesets_SIRT5_pos.csv", header = TRUE)
+names(genesets)[1] <- "NAME"
+genesets$NAME <- tolower(genesets$NAME)
+genesets$NAME <- gsub("_", " ", genesets$NAME)
+genesets$NAME <- gsub("kegg ", "", genesets$NAME)
+
+# add column to dataframe to signify whether or not gene sets are involved in amino acid metabolism
+amino_acids = "alanine|arginine|asparagine|aspartate|cysteine|glutamine|glutamate|glycine|histidine|isoleucine|leucine|lysine|methionine|phenylalanine|proline|serine|threonine|tryptophan|tyrosine|valine"
+genesets <- genesets %>% mutate(aa_metabolism = str_detect(NAME, amino_acids))
+
+# create plot of normalized enrichment score and nominal p-value
+plot <- ggplot(genesets, color = str_wrap(10)) +
+    geom_point(data=subset(genesets, aa_metabolism == "FALSE"), aes(NOM.p.val, NES, color = "No"), alpha = 0.5, size = 2) +
+    geom_point(data=subset(genesets, aa_metabolism == "TRUE"), aes(NOM.p.val, NES, color="Yes"), alpha = 0.5, size = 2) +
+    xlab("Nominal p-Value") +
+    ylab("Normalized Enrichment Score (NES)") +
+    scale_colour_manual(name="Amino Acid\nMetabolism", values=c(Yes="#404788FF", No="#95D840FF")) +
+    guides(colour = guide_legend(nrow = 2)) +
+    theme_light()
+
+plot
+```
+
+#EDA all
+Goodies here: https://drsimonj.svbtle.com/exploring-correlations-in-r-with-corrr
+```{r}
+any_over_90 <- function(x) any(x > .9, na.rm = TRUE)
+corr_all_90 <- corr_all %>% select_if(any_over_90)
+
+```
+
+
+
+
+
