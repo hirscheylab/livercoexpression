@@ -1,0 +1,501 @@
+---
+title: "R Notebook for liver coexpression analysis"
+output: html_notebook
+---
+
+#load libraries
+```{r}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("hgu133a2.db")
+
+library(tidyverse)
+library(here)
+library(ggrepel)
+library(janitor)
+library(feather)
+library("hgu133a2.db")
+library(corrr)
+library(beepr)
+library(enrichR)
+library(moderndive)
+library(readxl)
+
+#clear environment
+rm(list=ls()) 
+
+#Set theme
+theme_set(theme_light())
+```
+
+#define functions
+```{r}
+#pathway enrichment analysis loop function
+enrichr_loop <- function(gene_list, databases){
+focused_lib <- c("Achilles_fitness_decrease", "Achilles_fitness_increase", "Aging_Perturbations_from_GEO_down", "Aging_Perturbations_from_GEO_up", "Allen_Brain_Atlas_down", "Allen_Brain_Atlas_up", "ARCHS4_Cell-lines", "ARCHS4_IDG_Coexp", "ARCHS4_Kinases_Coexp", "ARCHS4_TFs_Coexp", "ARCHS4_Tissues", "BioCarta_2016", "BioPlex_2017", "Cancer_Cell_Line_Encyclopedia", "ChEA_2016", "Chromosome_Location_hg19", "CORUM", "Data_Acquisition_Method_Most_Popular_Genes", "Disease_Perturbations_from_GEO_down", "Disease_Perturbations_from_GEO_up", "Disease_Signatures_from_GEO_up_2014", "Drug_Perturbations_from_GEO_down", "Drug_Perturbations_from_GEO_up", "DrugMatrix", "DSigDB", "ENCODE_and_ChEA_Consensus_TFs_from_ChIP-X", "ENCODE_Histone_Modifications_2015", "ENCODE_TF_ChIP-seq_2015", "Enrichr_Libraries_Most_Popular_Genes", "Enrichr_Submissions_TF-Gene_Coocurrence", "Epigenomics_Roadmap_HM_ChIP-seq", "ESCAPE", "GeneSigDB", "GO_Biological_Process_2018", "GO_Cellular_Component_2018", "GO_Molecular_Function_2018", "GTEx_Tissue_Sample_Gene_Expression_Profiles_down", "GTEx_Tissue_Sample_Gene_Expression_Profiles_up", "GWAS_Catalog_2019", "HMDB_Metabolites", "HomoloGene", "Human_Gene_Atlas", "Human_Phenotype_Ontology", "HumanCyc_2015", "HumanCyc_2016", "huMAP", "InterPro_Domains_2019", "Jensen_COMPARTMENTS", "Jensen_DISEASES", "Jensen_TISSUES", "KEA_2015", "KEGG_2019_Human", "KEGG_2019_Mouse", "Kinase_Perturbations_from_GEO_down", "Kinase_Perturbations_from_GEO_up", "Ligand_Perturbations_from_GEO_down", "Ligand_Perturbations_from_GEO_up", "LINCS_L1000_Chem_Pert_down", "LINCS_L1000_Chem_Pert_up", "LINCS_L1000_Kinase_Perturbations_down", "LINCS_L1000_Kinase_Perturbations_up", "LINCS_L1000_Ligand_Perturbations_down", "LINCS_L1000_Ligand_Perturbations_up", "MCF7_Perturbations_from_GEO_down", "MCF7_Perturbations_from_GEO_up", "MGI_Mammalian_Phenotype_Level_4_2019", "Microbe_Perturbations_from_GEO_down", "Microbe_Perturbations_from_GEO_up", "miRTarBase_2017", "Mouse_Gene_Atlas", "MSigDB_Computational", "MSigDB_Oncogenic_Signatures", "NCI-60_Cancer_Cell_Lines", "NURSA_Human_Endogenous_Complexome", "Old_CMAP_down", "Old_CMAP_up", "OMIM_Disease", "OMIM_Expanded", "Panther_2016", "Pfam_Domains_2019", "Pfam_InterPro_Domains", "Phosphatase_Substrates_from_DEPOD", "PPI_Hub_Proteins", "Rare_Diseases_AutoRIF_ARCHS4_Predictions", "Rare_Diseases_AutoRIF_Gene_Lists", "Rare_Diseases_GeneRIF_ARCHS4_Predictions", "Rare_Diseases_GeneRIF_Gene_Lists", "Reactome_2016", "RNA-Seq_Disease_Gene_and_Drug_Signatures_from_GEO", "SILAC_Phosphoproteomics", "Single_Gene_Perturbations_from_GEO_down", "Single_Gene_Perturbations_from_GEO_up", "SubCell_BarCode", "SysMyo_Muscle_Gene_Sets", "TargetScan_microRNA_2017", "TF_Perturbations_Followed_by_Expression", "TF-LOF_Expression_from_GEO", "Tissue_Protein_Expression_from_Human_Proteome_Map", "Tissue_Protein_Expression_from_ProteomicsDB", "Transcription_Factor_PPIs", "TRANSFAC_and_JASPAR_PWMs", "TRRUST_Transcription_Factors_2019", "UK_Biobank_GWAS", "Virus_Perturbations_from_GEO_down", "Virus_Perturbations_from_GEO_up", "VirusMINT", "WikiPathways_2019_Human", "WikiPathways_2019_Mouse")
+
+  if(is_empty(gene_list)){
+    complete <- NULL
+    return(complete)
+  } else {
+    complete <- as_tibble()
+    for(lib in focused_lib){
+      enriched <- enrichr(gene_list, lib)
+      
+      flat <- flatten_dfc(enriched) %>% 
+        mutate(enrichr = lib)
+      
+      complete <- complete %>% 
+        bind_rows(flat)
+    }
+    complete <- complete %>% 
+      dplyr::arrange(Adjusted.P.value) 
+      #dplyr::select(enrichr, Term, Overlap) 
+    
+    complete$enrichr <- str_replace_all(complete$enrichr, "\\_", " ")
+    complete$Term <- str_replace_all(complete$Term, "\\_", " ")
+    return(complete)
+  }
+}
+```
+
+#import data
+```{r}
+# Load original liver data
+liver_data_raw <- read_tsv(here::here("data", "GSE14520_data.txt"))
+names(liver_data_raw)[1] <- "gsm_id"
+
+# Get all liver sample IDs and descriptions from a text file that is copy/pasted 
+# from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE14520
+liver_IDs <- read_tsv('data/GSE14520_ID.txt', col_names = FALSE)
+names(liver_IDs) = c('gsm_id', 'description')
+liver_IDs$gsm_id = gsub(' ', '', liver_IDs$gsm_id) # remove white space from GSE IDs
+
+# Add Tumor/Non-Tumor status column to liver ID table 
+liver_IDs <- liver_IDs %>% 
+  mutate(status = if_else(grepl("Non-Tumor", description) | grepl("six healthy donors", description), 'Non-Tumor', 'Tumor'))
+liver_IDs$status <- as.factor(liver_IDs$status)
+
+#Join liver data with ID to append tumor status
+liver_data_full <- liver_data_raw %>% 
+  left_join(liver_IDs, by = "gsm_id")
+```
+#match IDs to gene ID at this step?
+```{r}
+liver_data <- liver_data_full %>% 
+  dplyr::select(-gsm_id) %>% 
+  #dplyr::slice(1:20) %>% 
+  #dplyr::select(1:20) %>% 
+  return()
+
+keys <- names(liver_data) 
+names(keys) <- 'PROBEID'
+
+map <- select(hgu133a2.db, keys = keys, columns = c("SYMBOL", "ENTREZID", "GENENAME"), keytype = "PROBEID")
+
+map_trim <- map %>%
+  dplyr::select("PROBEID", "SYMBOL")
+```
+
+#select data of interest
+```{r}
+#get dataset of interest (non-tumor data)
+data <- liver_data_full %>% 
+  filter(status == "Non-Tumor") %>% 
+  select_if(is.numeric)
+```
+
+#correlation analysis all
+```{r}
+corr_all <- data %>% 
+  correlate() 
+
+#to save corr for later
+#write_feather(corr_all, "corr_all.feather")
+```
+#reload corr_all
+```{r corr_load, eval=FALSE, include=FALSE}
+#to reload previous analysis
+corr_all <- read_feather("corr_all.feather")
+class(corr_all) <- c("cor_df", "tbl_df", "tbl", "data.frame") #define class so functions (eg focus) can work on reloaded df
+```
+
+#EDA SIRT5
+```{r}
+#SIRT5	
+# 219185_at
+#	229112_at
+#	221010_s_at
+#	1566952_at
+#	1566953_x_at
+
+corr_sirt5 <- corr_all %>% 
+  focus("219185_at") %>% 
+  dplyr::rename(PROBEID = rowname) %>% 
+  dplyr::left_join(map, by = "PROBEID") %>% 
+  dplyr::rename(SIRT5 = "219185_at") %>% 
+  arrange(desc(SIRT5)) 
+
+corr_sirt5$GENENAME <- stringr::str_to_title(corr_sirt5$GENENAME)
+
+ggplot(corr_sirt5, aes(SIRT5)) +
+  geom_histogram(binwidth = .05, alpha = 0.9)
+
+#generate long dataset here
+corr_all_long <- corr_all %>% 
+  stretch()
+
+```
+#update df by replacing affy IDs with gene IDs; decided not to
+```{r eval=FALSE, include=FALSE}
+#corr_all_long_trim <- corr_all_long %>% sample_n(100)
+#corr_all_long_trim <- corr_all_long_trim %>% 
+#  dplyr::select(SYMBOL.x, SYMBOL.y, r) %>% 
+#  filter(!is.na(r))
+
+corr_all_long <- dplyr::left_join(corr_all_long, map_trim, by = c("x" = "PROBEID")) 
+corr_all_long <- dplyr::left_join(corr_all_long, map_trim, by = c("y" = "PROBEID"))
+
+corr_all_long <- corr_all_long %>% 
+  dplyr::select(SYMBOL.x, SYMBOL.y, r) %>% 
+  filter(!is.na(r))
+
+write_feather(corr_all_long, "corr_all_long.feather")
+
+#corr_all_2 <- corr_all_long %>% spread(SYMBOL.y, r)
+```
+
+#reload corr_all_long
+```{r}
+#corr_all_long <- read_feather("corr_all_long.feather") 
+
+```
+
+#resample
+```{r}
+virtual_livercorr <- corr_all_long %>% #achilles_cor_long already has all of the variables in a long format
+  filter(!is.na(r)) %>%   
+  rep_sample_n(size = 20000, reps = 1000) %>% #larger sample size, less error (but only 625 sets, and we're mimicking 1000?, but 310M combinations, so probably OK)
+  group_by(replicate) %>% 
+  summarize(mean = mean(r), max = max(r), min = min(r), sd = sd(r)) #how to handle + vs. - correlation?
+
+#instead of filtering, could:
+#summarize_all(list(max = max(r, na.rm = TRUE), 
+#                     min = min(r, na.rm = TRUE),
+#                     mean = mean(r, na.rm = TRUE),
+#                     sd = sd(r, na.rm = TRUE))) 
+#but threw and error
+
+#The mean may not be the best measure of centrality due to its sensitivity to outliers. The example data used here seems asymmetric and it that case the median is a better measure of centrality.
+#https://github.com/JoachimGoedhart/PlotsOfDifferences
+
+ggplot(virtual_livercorr, aes(x = mean)) +
+  geom_histogram(color = "white") +
+  labs(x = "Mean r^2 value from virtual achilles", 
+       title = "Distribution of mean r^2 values") 
+
+mean_virtual_livercorr <- mean(virtual_livercorr$mean)
+sd_virtual_livercorr <- mean(virtual_livercorr$sd)
+
+sd_threshold <- 2
+
+livercorr_upper <- mean_virtual_livercorr + sd_threshold*sd_virtual_livercorr
+livercorr_lower <- mean_virtual_livercorr - sd_threshold*sd_virtual_livercorr
+```
+
+
+#Figure
+```{r}
+top <- corr_sirt5 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  dplyr::top_n(20, SIRT5) %>% #filter for top_n
+  ggplot(aes(x = fct_reorder(SYMBOL, SIRT5), y = SIRT5)) +
+  geom_col() +
+  geom_text(aes(y = 0, label = GENENAME), colour = "white", hjust = 0, nudge_y = 0.01) +
+  #geom_hline(yintercept = 0.5, size = 0.5, color = "white", linetype = 2) +
+  coord_flip() +
+  labs(y = "Ranked correlation with SIRT5 expression", x = "")
+print(top)
+
+bottom <- corr_sirt5 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  dplyr::top_n(-20, SIRT5) %>% #filter for bottom(-)20
+  ggplot(aes(x = fct_reorder(SYMBOL, SIRT5), y = SIRT5)) +
+  geom_col() +
+  geom_text(aes(y = 0, label = GENENAME), colour = "white", hjust = 1, nudge_y = -0.01) +
+  #geom_hline(yintercept = 0.5, size = 0.5, color = "white", linetype = 2) +
+  coord_flip() +
+  labs(y = "Ranked correlation with SIRT5 expression", x = "")
+print(bottom)
+```
+#save
+```{r}
+ggsave("output/livercorr_sirt5_rank_top.pdf", plot = top, device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+ggsave("output/livercorr_sirt5_rank_bottom.pdf", plot = bottom, device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+
+```
+
+#GSEA
+```{r}
+# format data frame and save it as a ".gct" file for GSEA
+data_gct = data %>% rownames_to_column %>% 
+  gather(NAME, value, -rowname) %>% 
+  spread(rowname, value) %>% 
+  add_column(.after = 1, Description = "na")
+
+cat(paste("#1.2\n", toString(ncol(data)), "\t", toString(nrow(data)), "\n"), file = "data/data.gct")
+write_tsv(data_gct, "data/data.gct", append = TRUE, col_names = TRUE)
+```
+
+#plot of enriched gene sets
+```{r}
+# load and format dataframe of enriched gene sets (output from GSEA)
+genesets <- read.csv("data/genesets_SIRT5_pos.csv", header = TRUE)
+names(genesets)[1] <- "NAME"
+genesets$NAME <- tolower(genesets$NAME)
+genesets$NAME <- gsub("_", " ", genesets$NAME)
+genesets$NAME <- gsub("kegg ", "", genesets$NAME)
+
+# add column to dataframe to signify whether or not gene sets are involved in amino acid metabolism
+amino_acids = "alanine|arginine|asparagine|aspartate|cysteine|glutamine|glutamate|glycine|histidine|isoleucine|leucine|lysine|methionine|phenylalanine|proline|serine|threonine|tryptophan|tyrosine|valine"
+genesets <- genesets %>% mutate(aa_metabolism = str_detect(NAME, amino_acids))
+
+# create plot of normalized enrichment score and nominal p-value
+plot <- ggplot(genesets, color = str_wrap(10)) +
+    geom_point(data=subset(genesets, aa_metabolism == "FALSE"), aes(NOM.p.val, NES, color = "No"), alpha = 0.5, size = 2) +
+    geom_point(data=subset(genesets, aa_metabolism == "TRUE"), aes(NOM.p.val, NES, color="Yes"), alpha = 0.5, size = 2) +
+    xlab("Nominal p-Value") +
+    ylab("Normalized Enrichment Score (NES)") +
+    scale_colour_manual(name="Amino Acid\nMetabolism", values=c(Yes="#404788FF", No="#95D840FF")) +
+    guides(colour = guide_legend(nrow = 2)) +
+    theme_light()
+
+plot
+```
+
+#EDA all
+Goodies here: https://drsimonj.svbtle.com/exploring-correlations-in-r-with-corrr
+```{r}
+any_over_90 <- function(x) any(x > .9, na.rm = TRUE)
+corr_all_90 <- corr_all %>% select_if(any_over_90)
+
+```
+
+#GSEA
+```{r reports_complete, eval=FALSE, warning=FALSE, include=FALSE}
+gene_list <- corr_sirt5 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  #dplyr::top_n(50, SIRT5) %>% #filter for top_n
+  dplyr::filter(SIRT5 > livercorr_upper) %>% 
+  pull(SYMBOL) %>% 
+  c("SIRT5", .)
+
+focused_lib <- c("Achilles_fitness_decrease", "Achilles_fitness_increase", "Aging_Perturbations_from_GEO_down", "Aging_Perturbations_from_GEO_up", "Allen_Brain_Atlas_down", "Allen_Brain_Atlas_up", "ARCHS4_Cell-lines", "ARCHS4_IDG_Coexp", "ARCHS4_Kinases_Coexp", "ARCHS4_TFs_Coexp", "ARCHS4_Tissues", "BioCarta_2016", "BioPlex_2017", "Cancer_Cell_Line_Encyclopedia", "ChEA_2016", "Chromosome_Location_hg19", "CORUM", "Data_Acquisition_Method_Most_Popular_Genes", "Disease_Perturbations_from_GEO_down", "Disease_Perturbations_from_GEO_up", "Disease_Signatures_from_GEO_up_2014", "Drug_Perturbations_from_GEO_down", "Drug_Perturbations_from_GEO_up", "DrugMatrix", "DSigDB", "ENCODE_and_ChEA_Consensus_TFs_from_ChIP-X", "ENCODE_Histone_Modifications_2015", "ENCODE_TF_ChIP-seq_2015", "Enrichr_Libraries_Most_Popular_Genes", "Enrichr_Submissions_TF-Gene_Coocurrence", "Epigenomics_Roadmap_HM_ChIP-seq", "ESCAPE", "GeneSigDB", "GO_Biological_Process_2018", "GO_Cellular_Component_2018", "GO_Molecular_Function_2018", "GTEx_Tissue_Sample_Gene_Expression_Profiles_down", "GTEx_Tissue_Sample_Gene_Expression_Profiles_up", "GWAS_Catalog_2019", "HMDB_Metabolites", "HomoloGene", "Human_Gene_Atlas", "Human_Phenotype_Ontology", "HumanCyc_2015", "HumanCyc_2016", "huMAP", "InterPro_Domains_2019", "Jensen_COMPARTMENTS", "Jensen_DISEASES", "Jensen_TISSUES", "KEA_2015", "KEGG_2019_Human", "KEGG_2019_Mouse", "Kinase_Perturbations_from_GEO_down", "Kinase_Perturbations_from_GEO_up", "Ligand_Perturbations_from_GEO_down", "Ligand_Perturbations_from_GEO_up", "LINCS_L1000_Chem_Pert_down", "LINCS_L1000_Chem_Pert_up", "LINCS_L1000_Kinase_Perturbations_down", "LINCS_L1000_Kinase_Perturbations_up", "LINCS_L1000_Ligand_Perturbations_down", "LINCS_L1000_Ligand_Perturbations_up", "MCF7_Perturbations_from_GEO_down", "MCF7_Perturbations_from_GEO_up", "MGI_Mammalian_Phenotype_Level_4_2019", "Microbe_Perturbations_from_GEO_down", "Microbe_Perturbations_from_GEO_up", "miRTarBase_2017", "Mouse_Gene_Atlas", "MSigDB_Computational", "MSigDB_Oncogenic_Signatures", "NCI-60_Cancer_Cell_Lines", "NURSA_Human_Endogenous_Complexome", "Old_CMAP_down", "Old_CMAP_up", "OMIM_Disease", "OMIM_Expanded", "Panther_2016", "Pfam_Domains_2019", "Pfam_InterPro_Domains", "Phosphatase_Substrates_from_DEPOD", "PPI_Hub_Proteins", "Rare_Diseases_AutoRIF_ARCHS4_Predictions", "Rare_Diseases_AutoRIF_Gene_Lists", "Rare_Diseases_GeneRIF_ARCHS4_Predictions", "Rare_Diseases_GeneRIF_Gene_Lists", "Reactome_2016", "RNA-Seq_Disease_Gene_and_Drug_Signatures_from_GEO", "SILAC_Phosphoproteomics", "Single_Gene_Perturbations_from_GEO_down", "Single_Gene_Perturbations_from_GEO_up", "SubCell_BarCode", "SysMyo_Muscle_Gene_Sets", "TargetScan_microRNA_2017", "TF_Perturbations_Followed_by_Expression", "TF-LOF_Expression_from_GEO", "Tissue_Protein_Expression_from_Human_Proteome_Map", "Tissue_Protein_Expression_from_ProteomicsDB", "Transcription_Factor_PPIs", "TRANSFAC_and_JASPAR_PWMs", "TRRUST_Transcription_Factors_2019", "UK_Biobank_GWAS", "Virus_Perturbations_from_GEO_down", "Virus_Perturbations_from_GEO_up", "VirusMINT", "WikiPathways_2019_Human", "WikiPathways_2019_Mouse")
+
+#pathway enrichment analyses
+complete <- as_tibble()
+
+for(lib in focused_lib){
+  enriched <- enrichr(gene_list, lib)
+  
+  flat <- flatten_dfc(enriched) %>% 
+    mutate(enrichr = lib)
+  
+  complete <- complete %>% 
+    bind_rows(flat)
+}
+complete <- complete %>% 
+  arrange(Adjusted.P.value)
+
+complete$enrichr <- str_replace_all(complete$enrichr, "\\_", " ")
+complete$Term <- str_replace_all(complete$Term, "\\_", " ")
+
+# output
+complete <- complete %>% top_n(500)
+write_csv(complete, path = paste0(here::here(), "/SIRT5.csv", sep = ""))
+
+```
+
+#Repeat with SIRT3
+```{r}
+
+# SIRT3	
+# 221913_at
+#	221562_s_at
+#	49327_at
+	
+corr_sirt3 <- corr_all %>% 
+  focus("221913_at") %>% 
+  dplyr::rename(PROBEID = rowname) %>% 
+  dplyr::left_join(map, by = "PROBEID") %>% 
+  dplyr::rename(SIRT3 = "221913_at") %>% 
+  arrange(desc(SIRT3)) 
+
+corr_sirt3$GENENAME <- stringr::str_to_title(corr_sirt3$GENENAME)
+
+ggplot(corr_sirt3, aes(SIRT3)) +
+  geom_histogram(binwidth = .05, alpha = 0.9)
+
+top <- corr_sirt3 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  tidyr::drop_na() %>% 
+  dplyr::top_n(20, SIRT3) %>% #filter for top_n
+  ggplot(aes(x = fct_reorder(SYMBOL, SIRT3), y = SIRT3)) +
+  geom_col() +
+  geom_text(aes(y = 0, label = GENENAME), colour = "white", hjust = 0, nudge_y = 0.01) +
+  #geom_hline(yintercept = 0.5, size = 0.5, color = "white", linetype = 2) +
+  coord_flip() +
+  labs(y = "Ranked correlation with SIRT3 expression", x = "")
+print(top)
+
+bottom <- corr_sirt3 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  tidyr::drop_na() %>%
+  dplyr::top_n(-20, SIRT3) %>% #filter for bottom(-)20
+  ggplot(aes(x = fct_reorder(SYMBOL, SIRT3), y = SIRT3)) +
+  geom_col() +
+  geom_text(aes(y = 0, label = GENENAME), colour = "white", hjust = 1, nudge_y = -0.01) +
+  #geom_hline(yintercept = 0.5, size = 0.5, color = "white", linetype = 2) +
+  coord_flip() +
+  labs(y = "Ranked correlation with SIRT3 expression", x = "")
+print(bottom)
+
+ggsave("output/livercorr_sirt3_rank_top.pdf", plot = top, device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+ggsave("output/livercorr_sirt3_rank_bottom.pdf", plot = bottom, device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+
+ggsave("output/livercorr_sirt3_rank_top.svg", plot = top)
+ggsave("output/livercorr_sirt3_rank_bottom.svg", plot = bottom)
+
+gene_list <- corr_sirt3 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  dplyr::top_n(50, SIRT3) %>% #filter for top_n
+  pull(SYMBOL) %>% 
+  c("SIRT3", .)
+
+#pathway enrichment analyses
+complete <- as_tibble()
+
+for(lib in focused_lib){
+  enriched <- enrichr(gene_list, lib)
+  
+  flat <- flatten_dfc(enriched) %>% 
+    mutate(enrichr = lib)
+  
+  complete <- complete %>% 
+    bind_rows(flat)
+}
+complete <- complete %>% 
+  arrange(Adjusted.P.value)
+
+complete$enrichr <- str_replace_all(complete$enrichr, "\\_", " ")
+complete$Term <- str_replace_all(complete$Term, "\\_", " ")
+
+complete <- complete %>% top_n(500)
+write_csv(complete, path = paste0(here::here(), "/SIRT3.csv", sep = ""))
+
+```
+
+#Repeat with SIRT4
+```{r}
+
+#SIRT4	
+#220047_at
+#222248_s_at
+	
+corr_sirt4 <- corr_all %>% 
+  focus("220047_at") %>% 
+  dplyr::rename(PROBEID = rowname) %>% 
+  dplyr::left_join(map, by = "PROBEID") %>% 
+  dplyr::rename(SIRT4 = "220047_at") %>% 
+  arrange(desc(SIRT4)) 
+
+corr_sirt4$GENENAME <- stringr::str_to_title(corr_sirt4$GENENAME)
+
+ggplot(corr_sirt4, aes(SIRT4)) +
+  geom_histogram(binwidth = .05, alpha = 0.9)
+
+top <- corr_sirt4 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  tidyr::drop_na() %>% 
+  dplyr::top_n(20, SIRT4) %>% #filter for top_n
+  ggplot(aes(x = fct_reorder(SYMBOL, SIRT4), y = SIRT4)) +
+  geom_col() +
+  geom_text(aes(y = 0, label = GENENAME), colour = "white", hjust = 0, nudge_y = 0.01) +
+  #geom_hline(yintercept = 0.5, size = 0.5, color = "white", linetype = 2) +
+  coord_flip() +
+  labs(y = "Ranked correlation with SIRT4 expression", x = "")
+print(top)
+
+bottom <- corr_sirt4 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  tidyr::drop_na() %>%
+  dplyr::top_n(-20, SIRT4) %>% #filter for bottom(-)20
+  ggplot(aes(x = fct_reorder(SYMBOL, SIRT4), y = SIRT4)) +
+  geom_col() +
+  geom_text(aes(y = 0, label = GENENAME), colour = "white", hjust = 1, nudge_y = -0.01) +
+  #geom_hline(yintercept = 0.5, size = 0.5, color = "white", linetype = 2) +
+  coord_flip() +
+  labs(y = "Ranked correlation with SIRT4 expression", x = "")
+print(bottom)
+
+ggsave("output/livercorr_sirt4_rank_top.pdf", plot = top, device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+ggsave("output/livercorr_sirt4_rank_bottom.pdf", plot = bottom, device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+
+ggsave("output/livercorr_sirt4_rank_top.svg", plot = top)
+ggsave("output/livercorr_sirt4_rank_bottom.svg", plot = bottom)
+
+gene_list <- corr_sirt4 %>% 
+  dplyr::distinct(SYMBOL, .keep_all = TRUE) %>% #need this to omit duplicates
+  dplyr::top_n(50, SIRT4) %>% #filter for top_n
+  pull(SYMBOL) %>% 
+  c("SIRT4", .)
+
+#pathway enrichment analyses
+enrichr_loop(gene_list, focused_lib) %>% 
+  top_n(100) %>% 
+  write_csv(path = paste0(here::here(), "/SIRT4.csv", sep = ""))
+
+```
+#add mouse data
+Download precomputed correlations from [gene network](http://www.genenetwork.org/webqtl/main.py?sid=47ac0ae7635038423cb6986dbd3ee2e1411304ca)
+```{r}
+fav_gene <- c("Sirt5")
+
+mouse_liver <- readxl::read_xls(here::here("data", "Corr_vzSzogXm.xls"), skip = 7, col_names = TRUE) %>% 
+  clean_names() %>% 
+  arrange(desc(sample_r)) 
+
+mouse_liver_top <- mouse_liver %>% 
+  filter(sample_r > 0) %>% 
+  drop_na(symbol)
+
+mouse_liver_bottom <- mouse_liver %>% 
+  filter(sample_r < 0) %>% 
+  drop_na(symbol) %>% 
+  arrange(sample_r)
+
+#top pathway enrichment analyses and render
+gene_list <- mouse_liver_top %>% 
+  pull("symbol")
+
+complete <- enrichr_loop(gene_list, focused_lib)
+render("report_genelookup.rmd", output_dir = "output/", output_file = paste0(fav_gene, '_top_lookup.pdf'))
+
+
+#bottom pathway enrichment analyses and render
+gene_list <- mouse_liver_bottom %>% 
+  pull("symbol") 
+
+complete <- enrichr_loop(gene_list, focused_lib)
+render("report_genelookup.rmd", output_dir = "output/", output_file = paste0(fav_gene, '_bottom_lookup.pdf'))
+
+```
+
+#print Session information for provenance and reproducibility
+```{r}
+utils:::print.sessionInfo(sessionInfo()[-8]) 
+#You can remove an item from sessionInfo(), which is a list with a class attribute, by printing the resulting object omitting one of the list items (omitted list of packages installed, but not loaded)
+
+```
+
