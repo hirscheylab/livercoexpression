@@ -1,0 +1,573 @@
+---
+title: "MBX Analysis of fed, fasted, refed SIRT5 CRISPR cells"
+author: "Matthew Hirschey"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+  html_notebook:
+    toc: yes
+    toc_float: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook from the [Hirschey lab](http://www.hirscheylab.org).
+
+## Load libraries
+```{r message=FALSE, warning=FALSE}
+library(tidyverse) # for base packages
+library(readxl)
+library(janitor) # clean data
+library(viridis) # For awesome, accessible color palettes
+library(ggrepel) #for smart ggplot labels
+library(broom) #for stats
+library(svglite) #save plots to svg
+
+#clear environment
+rm(list=ls()) 
+#print Session information for provenance and reproducibility
+utils:::print.sessionInfo(sessionInfo()[-7]) 
+#You can remove an item from sessionInfo(), which is a list with a class attribute, by printing the resulting object omitting one of the list items (omitted list of packages installed, but not loaded)
+#Set theme
+theme_set(theme_light())
+
+```
+
+##functions
+```{r}
+#function to add noise to manually entered 1000s (below limit of detection) that locasale lab enters; these 1000s will throw an error in the ttest saying they are essentially equal, and therefore cannot run ttest fxn
+add_noise <- function(x){
+  if_else(x == 1000, jitter(x, amount = 1), x)}
+```
+
+## Load dataset
+Pull data from master excel spreadsheet. All data excluding chemical name, mz, pubchem, hmdb and KEGG. Only metabolite measurements for each condition
+```{r}
+data_raw <- read_csv("data/MBX_SIRT5_FeedingConditions_raw.csv", col_names = TRUE, trim_ws = TRUE) %>% #Data originally called Allie-4-13-2019.csv
+  clean_names() %>% #already clean, probalby don't need.
+  remove_empty(c("rows", "cols")) %>% #just in case, hard to know if there are empties
+  select(contains("metabolite"), starts_with("ii")) 
+head(data_raw, n = 10)
+
+
+```
+#transpose
+```{r}
+#swapping columns and rows. Now samples (fed 1, fed 2, fed 3) are rows with specific metabolites being the columns. (more rows and columns)
+sirt5 <- data_raw %>% 
+  gather(sample, value, -metabolite) %>% 
+  spread(metabolite, value) 
+#mapping the new table as a tibble and adding noise to allow the statistics to work correctly
+sirt5 <- sirt5 %>%
+  map_if(., is.numeric, add_noise) %>% #add jitter to my 1000s
+  as_tibble() #otherwise stays as list
+
+head(sirt5)
+
+```
+
+
+
+
+#add factor level group ids as new column
+
+```{r}
+#adding group_id column. In this case, group id is genotype and condition. Information to identify this pulled from "sample" column
+sirt5 <- mutate(sirt5, group_id = 
+                  ifelse(grepl("tfed", sample), "wt_fed",
+                  ifelse(grepl("ofed", sample), "ko_fed",
+                  ifelse(grepl("wt_starve", sample), "wt_starve",
+                  ifelse(grepl("ko_starve", sample), "ko_starve",
+                  ifelse(grepl("wt_refed", sample), "wt_refed",
+                  "ko_refed"))))))
+
+head(sirt5)
+```
+#log transform
+```{r}
+sirt5_log <- sirt5 %>%
+  map_if(., is.numeric, log2) %>% 
+  as_tibble()
+
+head(sirt5_log)
+```
+
+#calculate mean, and then normalize each mean
+```{r}
+#make a 'flat' group a, vector to then operate the 'mean' funtion on
+sirt5_log_mean_control <- sirt5_log %>%
+  filter(group_id == "wt_fed") %>%
+  summarize_if(is.numeric, mean) %>% 
+  flatten_dbl() #'removes hierarchy from the data' 
+head(sirt5_log_mean_control)
+
+```
+
+```{r}
+
+#mutate all values by dividing by mean of 'control', and then re-bind to group ID
+sirt5_log_rel <- sirt5_log %>%
+  select_if(is.numeric) %>%
+  map2(., sirt5_log_mean_control, ~ .x - .y) %>% #subtract becuase it's log space
+  bind_cols(select(sirt5_log, group_id), .)
+head(sirt5_log_rel)
+
+```
+
+```{r}
+
+#calculate avg
+sirt5_log_rel_mean <- sirt5_log_rel %>% 
+  group_by(group_id) %>% 
+  summarize_if(., is.numeric, funs(mean)) 
+
+head(sirt5_log_rel_mean)
+
+```
+
+```{r}
+
+#add factors back in
+sirt5_log_rel_mean <- sirt5_log_rel_mean %>% 
+  mutate(genotype= 
+           ifelse(str_detect(group_id, "wt"), "wt", 
+                  "ko"))
+# added a genotype column to the data based on group_id info
+head(sirt5_log_rel_mean)
+```
+
+```{r}
+sirt5_log_rel_mean <- sirt5_log_rel_mean %>% 
+  mutate(status= 
+            ifelse(str_detect(group_id, "refed"), "refed", 
+            ifelse(str_detect(group_id, "starve"), "starved", 
+                   "fed"))) #order is important to differentiate str_detect 'fed' and 'refed', which contains 'fed' w/i
+  #same as before: adding a new column, this time "status", which is really the treatment condition
+
+#reorder
+sirt5_log_rel_mean <- sirt5_log_rel_mean %>% 
+  select(group_id, genotype, status, 2:277)  
+
+head(sirt5_log_rel_mean)
+```
+
+```{r}
+
+#log data for plotting
+sirt5_log_plot <- sirt5_log_rel_mean %>% 
+  gather(key = "metabolite", value = "normalized_control", 4:279) %>% 
+  arrange(desc(normalized_control))
+
+#once again transpsed the data. Now instead of eachh metabolite being it's own column, we return to the "metabolites" column format
+```
+
+```{r}
+
+sirt5_log_plot$metabolite <- as.factor(sirt5_log_plot$metabolite)
+sirt5_log_plot$group_id <- as.factor(sirt5_log_plot$group_id)
+sirt5_log_plot$genotype <- as.factor(sirt5_log_plot$genotype)
+sirt5_log_plot$status <- as.factor(sirt5_log_plot$status)
+
+#sirt5_log_plot contains all log transformed, normalized (to wt_fed) data!!!
+```
+#exploratory
+```{r}
+#plot relative log2 fold change
+sirt5_log_plot %>% 
+  filter(group_id == "ko_fed") %>% 
+  mutate(metabolite = fct_reorder(metabolite, normalized_control)) %>% 
+  ggplot(aes(x = metabolite, y = normalized_control)) +
+  geom_point(alpha = 0.5)
+```
+
+```{r}
+#check re-order, top/bottom (tables)
+sirt5_log_plot %>% filter(group_id == "ko_fed") %>% head(plot, n = 10)
+sirt5_log_plot %>% filter(group_id == "ko_fed") %>% tail(plot, n = 10)
+```
+
+```{r}
+sirt5_log_plot %>% 
+  filter(genotype == "ko") %>% 
+  mutate(status = fct_relevel(status, c("fed", "starved", "refed"))) %>% 
+  ggplot(aes(x = status, y = normalized_control, group = metabolite, color = genotype)) +
+  geom_point(alpha = 0.8) +
+  geom_line(alpha = 0.2) +
+  NULL
+```
+
+```{r}
+sirt5_log_plot %>% 
+  filter(genotype == "wt") %>% 
+  mutate(status = fct_relevel(status, c("fed", "starved", "refed"))) %>% 
+  ggplot(aes(x = status, y = normalized_control, group = metabolite, color = genotype)) +   
+  geom_point(alpha = 0.8) + 
+  geom_line(alpha = 0.2) 
+
+
+```
+
+
+
+#calculate p-values, then correct for FDR
+```{r}
+#pvalue
+sirt5_p <- sirt5 %>%
+  filter(group_id =="wt_fed" | group_id == "ko_fed") %>% 
+  select(-sample) %>% 
+  gather(metabolite, value, -group_id) %>% #Gather the columns into rows.
+  group_by(metabolite) %>% #Group it by variable (which now contains meta1, meta2, metax)
+  nest() %>% #Nest all non-grouping columns into list-frames
+  mutate(t_test = map(data, ~tidy(t.test(value ~ group_id, data = .x)))) %>% #Create a new variable called t_test with `mutate` assign it the value resulting from maping the function `t.test` over each element of data, using the formula interface to run `value ~ group_id`.  Use `tidy` to format  that result into a data frame.
+  unnest(t_test) %>%  #Unnest the `t_test` list column into the regular data frame.
+  select(one_of(c("metabolite", "p.value"))) %>% 
+  arrange(p.value)
+
+#fdr
+sirt5_p <- sirt5_p %>%
+  mutate(q.value = p.adjust(p.value, method = "fdr"))
+```
+
+#join p.value and logFC tables
+```{r}
+sirt5_plot <- sirt5_log_plot %>% 
+  filter(group_id == "ko_fed") %>% 
+  left_join(sirt5_p, by = "metabolite")
+```
+
+#plot final
+```{r}
+#make labels df
+sig <- sirt5_plot %>% 
+  filter(normalized_control <= -0.5 | normalized_control >= 0.5) %>% 
+  filter(q.value < 0.05)
+
+fedmetsig<- select(sig, "metabolite")
+
+write.csv(fedmetsig, "SigMetinFed.csv")
+
+```
+
+```{r}
+#plot relative log2 fold change vs. p.value
+ggplot(sirt5_plot) +
+  geom_hline(aes(yintercept = 1.30103), linetype = "dotted") + 
+  geom_vline(aes(xintercept = 1), linetype = "dotted") + 
+  geom_vline(aes(xintercept = -1), linetype = "dotted") + 
+  geom_vline(aes(xintercept = 0)) + 
+  geom_hline(aes(yintercept = 0)) + 
+  geom_point(aes(x = normalized_control, y = -log(p.value, 10), fill = normalized_control), alpha = 0.8, size = 4, shape = 21, color = "black") +  
+  geom_label_repel(data = sig , aes(x = normalized_control, y = -log(p.value, 10), label = metabolite), alpha = 0.8, size = 3, segment.size = 0.3, point.padding = 0.8) + 
+  scale_fill_viridis(option = "viridis", direction = 1, name = expression("Log"[2]*"FC")) + 
+  labs(x = expression("Relative fold change (log"[2]*") compared to control"), 
+       y = expression("-Log "[10]*" uncorrected p-value"), 
+       title = "293T SIRT5 crKO/crWT metabolite profiling in the fed state",
+       subtitle = "The influence of SIRT5 under basal conditions") +
+  theme_bw() + 
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.background = element_rect(fill = "white", size = 4, colour = "white"),
+    axis.ticks = element_line(colour = "grey70", size = 0.2),
+    panel.grid.major = element_line(colour = "grey70", size = 0.2),
+    panel.grid.minor = element_blank()
+  ) 
+
+#check top/bottom
+sirt5_plot %>% filter(group_id == "ko_fed") %>% head(plot, n = 10)
+sirt5_plot %>% filter(group_id == "ko_fed") %>% tail(plot, n = 10)
+
+
+#ggsave("Sirt5KOvsWT_Fed.svg", height = 6, width = 8, units = "in", dpi = 600)
+ggsave("Sirt5KOvsWT_Fed.png", height = 6, width = 8, units = "in", dpi = 600)
+```
+#save
+```{r}
+ggsave("output/sirt5kocells_fed.pdf", plot = last_plot(), device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+write_delim(sirt5_plot, "output/sirt5_fed.csv", delim = ",", na = "")
+```
+
+#REPEAT FOR starved
+```{r}
+
+#make a 'flat' group a, vector to then operate the 'mean' funtion on
+sirt5_log_mean_control2 <- sirt5_log %>%
+  filter(group_id == "wt_starve") %>% #filtering out only wt_starve samples
+  summarize_if(is.numeric, mean) %>% #for variables that are numeric, applying mean function
+  flatten_dbl() #not sure I understand what this is doing
+
+sirt5_log_mean_control2
+```
+
+```{r}
+#mutate all values by dividing by mean of 'control', and then re-bind to group ID
+sirt5_log_rel2 <- sirt5_log %>%
+  select_if(is.numeric) %>%
+  map2(., sirt5_log_mean_control2, ~ .x - .y) %>% #subtract becuase it's log space
+  bind_cols(select(sirt5_log, group_id), .)
+sirt5_log_rel2
+```
+
+```{r}
+#calculate avg
+sirt5_log_rel_mean2 <- sirt5_log_rel2 %>% 
+  group_by(group_id) %>% 
+  summarize_if(., is.numeric, funs(mean)) 
+sirt5_log_rel_mean2
+```
+
+```{r}
+#add factors back in
+sirt5_log_rel_mean2 <- sirt5_log_rel_mean2 %>% 
+  mutate(genotype = 
+           ifelse(str_detect(group_id, "wt"), "wt", 
+                  "ko"))
+sirt5_log_rel_mean2 <- sirt5_log_rel_mean2 %>% 
+  mutate( status = 
+            ifelse(str_detect(group_id, "refed"), "refed", 
+                   ifelse(str_detect(group_id, "starve"), "starved",
+                          "fed"))) #order is important to differentiate str_detect 'fed' and 'refed', which contains 'fed' w/i
+#reorder
+sirt5_log_rel_mean2 <- sirt5_log_rel_mean2 %>% 
+  select(group_id, genotype, status, 2:277)
+
+
+#long data for plotting
+sirt5_log_plot2 <- sirt5_log_rel_mean2 %>% 
+  gather(key = "metabolite", value = "normalized_control", 4:279) %>% 
+  arrange(desc(normalized_control))
+
+sirt5_log_plot2$metabolite <- as.factor(sirt5_log_plot2$metabolite)
+sirt5_log_plot2$group_id <- as.factor(sirt5_log_plot2$group_id)
+sirt5_log_plot2$genotype <- as.factor(sirt5_log_plot2$genotype)
+sirt5_log_plot2$status <- as.factor(sirt5_log_plot2$status)
+
+#sirt5_log_plot contains all log transformed, normalized (to wt_starve) data!!!
+```
+#exploratory
+```{r}
+#plot relative log2 fold change
+sirt5_log_plot2 %>% 
+  filter(group_id == "ko_starve") %>% 
+  mutate(metabolite = fct_reorder(metabolite, normalized_control)) %>% 
+  ggplot(aes(x = metabolite, y = normalized_control)) +
+  geom_point(alpha = 0.5)+
+  geom_label_repel(data = sirt5_log_plot2 , aes(x = metabolite, y = normalized_control, label = metabolite), alpha = 0.8, size = 3, segment.size = 0.3, point.padding = 0.8) 
+
+#check re-order, top/bottom
+sirt5_log_plot2 %>% filter(group_id == "ko_starve") %>% head(plot, n = 10)
+sirt5_log_plot2 %>% filter(group_id == "ko_starve") %>% tail(plot, n = 10)
+
+```
+
+
+
+#calculate p-values, then correct for FDR
+```{r}
+#pvalue
+sirt5_p2 <- sirt5 %>%
+  filter(group_id =="wt_starve" | group_id == "ko_starve") %>% 
+  select(-sample) %>% 
+  gather(metabolite, value, -group_id) %>% #Gather the columns into rows.
+  group_by(metabolite) %>% #Group it by variable (which now contains meta1, meta2, metax)
+  nest() %>% #Nest all non-grouping columns into list-frames
+  mutate(t_test = map(data, ~tidy(t.test(value ~ group_id, data = .x)))) %>% #Create a new variable called t_test with `mutate` assign it the value resulting from maping the function `t.test` over each element of data, using the formula interface to run `value ~ group_id`.  Use `tidy` to format  that result into a data frame.
+  unnest(t_test) %>%  #Unnest the `t_test` list column into the regular data frame.
+  select(one_of(c("metabolite", "p.value"))) %>% 
+  arrange(p.value)
+
+#fdr
+sirt5_p2 <- sirt5_p2 %>%
+  mutate(q.value = p.adjust(p.value, method = "fdr"))
+```
+
+#join p.value and logFC tables
+```{r}
+sirt5_plot2 <- sirt5_log_plot2 %>% 
+  filter(group_id == "ko_starve") %>% 
+  left_join(sirt5_p2, by = "metabolite")
+```
+
+#plot final
+```{r}
+#make labels df
+sig2 <- sirt5_plot2 %>% 
+  filter(normalized_control <= -0.5 | normalized_control >= 0.5) %>% 
+  filter(q.value < 0.0015)
+
+#plot relative log2 fold change vs. p.value
+ggplot(sirt5_plot2) +
+  geom_hline(aes(yintercept = 1.30103), linetype = "dotted") + #p.value 0.05
+  geom_vline(aes(xintercept = 1), linetype = "dotted") + #2FC
+  geom_vline(aes(xintercept = -1), linetype = "dotted") + #-2FC
+  geom_vline(aes(xintercept = 0)) + #bold axis
+  geom_hline(aes(yintercept = 0)) + #bold axis
+  geom_point(aes(x = normalized_control, y = -log(p.value, 10), fill = normalized_control), alpha = 0.8, size = 4, shape = 21, color = "black") +
+  geom_label_repel(data = sig2, aes(x = normalized_control, y = -log(p.value, 10), label = metabolite), alpha = 0.8, size = 3, segment.size = 0.3, point.padding = 0.8) +
+  scale_fill_viridis(option = "viridis", direction = 1, name = expression("Log"[2]*"FC")) +
+  labs(x = expression("Relative fold change (log"[2]*") compared to control"), 
+       y = expression("-Log "[10]*" uncorrected p-value"), 
+       title = "293T SIRT5 crKO/crWT metabolite profiling in the fasted state",
+       subtitle = "The influence of SIRT5 during starvation") +
+  theme_bw() + 
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.background = element_rect(fill = "white", size = 4, colour = "white"),
+    axis.ticks = element_line(colour = "grey70", size = 0.2),
+    panel.grid.major = element_line(colour = "grey70", size = 0.2),
+    panel.grid.minor = element_blank()
+  ) 
+#ggsave("output/Sirt5KOvsWT_fasted.svg", height = 6, width = 8, units = "in", dpi = 600)
+ggsave("output/Sirt5KOvsWT_fasted.png", height = 6, width = 8, units = "in", dpi = 600)
+
+#check top/bottom
+sirt5_plot2 %>% filter(group_id == "ko_starve") %>% head(plot, n = 10)
+sirt5_plot2 %>% filter(group_id == "ko_starve") %>% tail(plot, n = 10)
+
+```
+#save
+```{r}
+ggsave("output/sirt5kocells_starve.pdf", plot = last_plot(), device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+write_delim(sirt5_plot2, "output/sirt5_starve.csv", delim = ",", na = "")
+```
+
+#REPEAT FOR refed
+```{r}
+
+#make a 'flat' group a, vector to then operate the 'mean' funtion on
+sirt5_log_mean_control3 <- sirt5_log %>%
+  filter(group_id == "wt_refed") %>%
+  summarize_if(is.numeric, mean) %>% 
+  flatten_dbl()
+sirt5_log_mean_control3
+
+#mutate all values by divinding by mean of 'control', and then re-bind to group ID
+sirt5_log_rel3 <- sirt5_log %>%
+  select_if(is.numeric) %>%
+  map2(., sirt5_log_mean_control3, ~ .x - .y) %>% #subtract becuase it's log space
+  bind_cols(select(sirt5_log, group_id), .)
+sirt5_log_rel3
+
+#calculate avg
+sirt5_log_rel_mean3 <- sirt5_log_rel3 %>% 
+  group_by(group_id) %>% 
+  summarize_if(., is.numeric, funs(mean))
+sirt5_log_rel_mean3
+
+#add factors back in
+sirt5_log_rel_mean3 <- sirt5_log_rel_mean3 %>% 
+  mutate(genotype = 
+           ifelse(str_detect(group_id, "wt"), "wt", 
+                  "ko"))
+sirt5_log_rel_mean3 <- sirt5_log_rel_mean3 %>% 
+  mutate(status = 
+            ifelse(str_detect(group_id, "refed"), "refed", 
+                   ifelse(str_detect(group_id, "starve"), "starved",
+                          "fed"))) #order is important to differentiate str_detect 'fed' and 'refed', which contains 'fed' w/i
+#reorder
+sirt5_log_rel_mean3 <- sirt5_log_rel_mean3 %>% 
+  select(group_id, genotype, status, 2:277)
+
+
+#long data for plotting
+sirt5_log_plot3 <- sirt5_log_rel_mean3 %>% 
+  gather(key = "metabolite", value = "normalized_control", 4:279) %>% 
+  arrange(desc(normalized_control))
+
+sirt5_log_plot3$metabolite <- as.factor(sirt5_log_plot3$metabolite)
+sirt5_log_plot3$group_id <- as.factor(sirt5_log_plot3$group_id)
+sirt5_log_plot3$genotype <- as.factor(sirt5_log_plot3$genotype)
+sirt5_log_plot3$status <- as.factor(sirt5_log_plot3$status)
+
+#sirt5_log_plot contains all log transformed, normalized (to wt_starve) data!!!
+```
+#exploratory
+```{r}
+#plot relative log2 fold change
+sirt5_log_plot3 %>% 
+  filter(group_id == "ko_refed") %>% 
+  mutate(metabolite = fct_reorder(metabolite, normalized_control)) %>% 
+  ggplot(aes(x = metabolite, y = normalized_control)) +
+  geom_point(alpha = 0.5)
+
+#check re-order, top/bottom
+sirt5_log_plot3 %>% filter(group_id == "ko_refed") %>% head(plot, n = 10)
+sirt5_log_plot3 %>% filter(group_id == "ko_refed") %>% tail(plot, n = 10)
+
+```
+
+
+
+#calculate p-values, then correct for FDR
+```{r}
+#pvalue
+sirt5_p3 <- sirt5 %>%
+  filter(group_id =="wt_refed" | group_id == "ko_refed") %>% 
+  select(-sample) %>% 
+  gather(metabolite, value, -group_id) %>% #Gather the columns into rows.
+  group_by(metabolite) %>% #Group it by variable (which now contains meta1, meta2, metax)
+  nest() %>% #Nest all non-grouping columns into list-frames
+  mutate(t_test = map(data, ~tidy(t.test(value ~ group_id, data = .x)))) %>% #Create a new variable called t_test with `mutate` assign it the value resulting from maping the function `t.test` over each element of data, using the formula interface to run `value ~ group_id`.  Use `tidy` to format  that result into a data frame.
+  unnest(t_test) %>%  #Unnest the `t_test` list column into the regular data frame.
+  select(one_of(c("metabolite", "p.value"))) %>% 
+  arrange(p.value)
+
+#fdr
+sirt5_p3 <- sirt5_p3 %>%
+  mutate(q.value = p.adjust(p.value, method = "fdr"))
+```
+
+#join p.value and logFC tables
+```{r}
+sirt5_plot3 <- sirt5_log_plot3 %>% 
+  filter(group_id == "ko_refed") %>% 
+  left_join(sirt5_p3, by = "metabolite")
+```
+
+#plot final
+```{r}
+#make labels df
+sig3 <- sirt5_plot3 %>% 
+  filter(normalized_control <= -0.5 | normalized_control >= 0.5) %>% 
+  filter(q.value < 0.015)
+
+#plot relative log2 fold change vs. p.value
+ggplot(sirt5_plot3) +
+  geom_hline(aes(yintercept = 1.30103), linetype = "dotted") + #p.value 0.05
+  geom_vline(aes(xintercept = 1), linetype = "dotted") + #2FC
+  geom_vline(aes(xintercept = -1), linetype = "dotted") + #-2FC
+  geom_vline(aes(xintercept = 0)) + #bold axis
+  geom_hline(aes(yintercept = 0)) + #bold axis
+  geom_point(aes(x = normalized_control, y = -log(p.value, 10), fill = normalized_control), alpha = 0.8, size = 4, shape = 21, color = "black") +
+  geom_label_repel(data = sig3, aes(x = normalized_control, y = -log(p.value, 10), label = metabolite), alpha = 0.8, size = 3, segment.size = 0.3, point.padding = 0.8) +
+  scale_fill_viridis(option = "viridis", direction = 1, name = expression("Log"[2]*"FC")) +
+  labs(x = expression("Relative fold change (log"[2]*") compared to control"), 
+       y = expression("-Log "[10]*" uncorrected p-value"), 
+       title = "293T SIRT5 crKO/crWT metabolite profiling in the refed state",
+       subtitle = "The influence of SIRT5 on refeeding") +
+  theme_bw() + 
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.background = element_rect(fill = "white", size = 4, colour = "white"),
+    axis.ticks = element_line(colour = "grey70", size = 0.2),
+    panel.grid.major = element_line(colour = "grey70", size = 0.2),
+    panel.grid.minor = element_blank()
+  ) 
+
+#check top/bottom
+sirt5_plot3 %>% filter(group_id == "ko_refed") %>% head(plot, n = 10)
+sirt5_plot3 %>% filter(group_id == "ko_refed") %>% tail(plot, n = 10)
+
+#ggsave("output/Sirt5KOvsWT_refed.svg", height = 6, width = 8, units = "in", dpi = 600)
+ggsave("output/Sirt5KOvsWT_refed_small.png", height = 3, width = 4, units = "in", dpi = 600)
+```
+#save
+```{r}
+ggsave("output/sirt5kocells_refed.pdf", plot = last_plot(), device = "pdf", height = 6, width = 8, units = "in", dpi = 600)
+write_delim(sirt5_plot3, "output/sirt5_refed.csv", delim = ",", na = "")
+```
+
+
+
+
